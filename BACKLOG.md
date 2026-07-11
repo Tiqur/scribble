@@ -14,6 +14,19 @@ rc3 test build didn't help). It's a host-side bug with no plugin-side workaround
 (file-level `deleteElements` would lose undo + risk cache data-loss; not worth
 it). Reported in `FEEDBACK.md`. Re-test once Ratta ships a firmware fix.
 
+## Gate erase-by-scribble on the physical side button (blocked, no SDK hook)
+
+Idea: let the user opt into a mode where erase-by-scribble only fires when the
+scribble stroke is drawn while the device's physical side button is held —
+today the feature is gesture-only, no button. Checked the SDK
+(`sn-plugin-lib`): plugins only receive three events — `PEN_UP`,
+`IMPORT_STICKER`, `MOTION_EVENT` — none of which expose the hardware
+chassis button's press/release/held state. (Note: the SDK's
+`PluginSideButton` class is the in-app sidebar UI button, not the physical
+one — unrelated.) There is currently no way for a plugin to observe this
+signal at all, so the opt-in mode can't be built. Re-check if/when the SDK
+exposes a hardware button event.
+
 ## Landscape (split-page) erase
 
 Erase-by-scribble currently skips in landscape (a brief notice, no-op) because
