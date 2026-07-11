@@ -4,6 +4,31 @@ A log of significant, non-obvious design choices and the alternatives that were
 rejected. This is the *why* behind the architecture — distinct from CHANGES.md
 (*what* changed) and SDK_DOC.md (*what the SDK does*).
 
+## 2026-07-11 — Remove the over-selection guard entirely (B-001)
+
+**Decision:** Delete the over-selection guard (introduced 2026-06-15, tuned
+2026-06-18) outright. Erase-by-scribble now always deletes the full lasso
+selection, however large; there is no cancel path and no user-facing message
+for this case. Undo is the sole recovery mechanism.
+
+**Why:** B-001 — the guard's abort branch showed a "Scribble would erase too
+much nearby content — cancelled." message, but still ran a second, smaller
+delete (re-lassoing the scribble's own bbox) to avoid leaving the scribble
+mark on the page, which itself could delete other strokes fully inside that
+box. The message therefore claimed nothing happened while something still
+did. Given the user's explicit preference — no message at all, always
+delete, rely on Undo if the result is unwanted — fixing the message's
+wording would still leave a two-tier, harder-to-reason-about behavior
+(cancel-but-not-really). Removing the guard collapses this to one path.
+
+**Rejected:** (a) Keep the guard, fix the message to disclose the residual
+delete — accurate, but keeps two delete paths (full vs. scribble-bbox-only)
+for one operation, which is more surface area for a similar bug later than
+just having one unconditional delete path. (b) Keep the guard, drop the
+residual delete (truly cancel, leaving the scribble mark behind) — rejected
+by the user; leaving visible scribble ink on the page after a "cancel" was
+considered worse than deleting more than expected, since Undo covers both.
+
 ## 2026-06-19 — Delete-not-persisting on some firmware is a host bug; no plugin workaround
 
 **Decision:** Ship v1.1.1 for the devices where erase works (A5X, Nomad, …),

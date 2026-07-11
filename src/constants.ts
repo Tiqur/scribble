@@ -37,16 +37,6 @@ export const REVERSAL_DEADBAND_FRAC = 0.1;
 // caps any extra collateral the wider box pulls in.
 export const LASSO_PAD_PX = 8;
 
-// Over-selection guard for the erase. The lasso (rect, fully-inside) can pull in
-// untouched strokes that sit fully within the crossed strokes' bounding box. If
-// the lasso selects more than this many strokes beyond the set we actually
-// detected as crossed (+ the scribble itself), the erase cancels instead of
-// mass-deleting. The count is a loose proxy — a multi-stroke word inflates it
-// because the scribble only geometrically crosses some of its strokes — so keep
-// it generous; it's only meant to catch a runaway scribble (e.g. one bridging
-// two far-apart strokes). Collateral is undoable regardless.
-export const MAX_COLLATERAL_STROKES = 12;
-
 // SDK element type codes (from getElements / getLassoElements).
 export const ELEMENT_TYPES = {
   STROKE: 0,

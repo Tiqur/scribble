@@ -5,17 +5,15 @@
  *
  * Sequence: read the page → find crossed strokes (bbox prefilter → polyline
  * intersection, excluding the just-drawn stroke) → lasso the union bounding box
- * (screen coords) → over-selection guard → deleteLassoElements → release the
- * lasso. The page read happens only here (on a confirmed scribble), never during
- * normal writing.
+ * (screen coords) → deleteLassoElements → release the lasso. The page read
+ * happens only here (on a confirmed scribble), never during normal writing.
  *
  * @format
  */
 
 import { PluginCommAPI, PluginFileAPI, PluginManager } from 'sn-plugin-lib';
-import { dlog, LASSO_PAD_PX, LOG, MAX_COLLATERAL_STROKES } from '../constants';
+import { dlog, LASSO_PAD_PX, LOG } from '../constants';
 import { acquireBusy, releaseBusy } from './busy';
-import { notify } from './notify';
 import {
   Bbox,
   bboxesOverlap,
@@ -57,7 +55,6 @@ export async function eraseByScribble(
   let viewShown = false;
   let lassoOpen = false;
   let pageEls: any[] = [];
-  let abortMsg: string | null = null; // shown after the overlay closes, so it's not hidden behind it
   try {
     // Non-blocking "Working…" overlay; the page read can take seconds on a dense
     // page (getElements marshals every element).
@@ -137,40 +134,13 @@ export async function eraseByScribble(
       return;
     }
 
-    // Over-selection guard. uuid is NOT consistent across getElements vs
-    // getLassoElements, so we can't match the selection against the crossed set
-    // by identity; guard by COUNT instead. We expect ~ crossed strokes + the
-    // scribble itself; abort only if the lasso pulls in many more than that.
-    const over = Math.max(0, selected.length - (crossed.length + 1));
-    if (over > MAX_COLLATERAL_STROKES) {
-      dlog(`${LOG} erase: over=${over} > ${MAX_COLLATERAL_STROKES} — cancelling, removing scribble only`);
-      abortMsg = 'Scribble would erase too much nearby content — cancelled.';
-      // Don't leave the scribble scrawl on the page: release the broad selection
-      // and delete just the scribble's own box. (Can't isolate the scribble via
-      // a rect lasso, so this also removes anything fully under it — a far
-      // smaller footprint than the union box we're refusing, and undoable.)
-      try {
-        await PluginCommAPI.setLassoBoxState(2);
-        lassoOpen = false;
-        const sr: any = await PluginCommAPI.lassoElements(toRect(scribbleBox));
-        if (sr?.success) {
-          lassoOpen = true;
-          const ssel: any = await PluginCommAPI.getLassoElements();
-          if ((ssel?.result ?? []).length > 0) await PluginCommAPI.deleteLassoElements();
-        }
-      } catch (e) {
-        dlog(`${LOG} erase: scribble cleanup failed: ${e}`);
-      }
-      return;
-    }
-
     const del: any = await PluginCommAPI.deleteLassoElements();
-    dlog(`${LOG} erase: deleted=${selected.length} crossed=${crossed.length} over=${over} success=${del?.success}`);
+    dlog(`${LOG} erase: deleted=${selected.length} crossed=${crossed.length} success=${del?.success}`);
   } catch (err) {
     console.error(`${LOG} eraseByScribble failed:`, err);
   } finally {
-    // Release the lasso on every path (success, abort, or exception) before any
-    // later mutation can run.
+    // Release the lasso on every path (success or exception) before any later
+    // mutation can run.
     if (lassoOpen) {
       try { await PluginCommAPI.setLassoBoxState(2); } catch (e) { dlog(`${LOG} erase: setLassoBoxState failed: ${e}`); }
     }
@@ -181,7 +151,5 @@ export async function eraseByScribble(
     if (viewShown) {
       try { await PluginManager.closePluginView(); } catch (e) { dlog(`${LOG} erase: closePluginView failed: ${e}`); }
     }
-    // After the overlay is gone and the lasso released, surface any user message.
-    if (abortMsg) await notify(abortMsg);
   }
 }

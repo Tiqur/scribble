@@ -81,9 +81,8 @@ collapse-expand's file-level path is not.)
   stroke is classified independently.
 - **Collateral deletion.** Because the lasso selects by rectangle, an untouched
   stroke that lies fully inside the bounding box of the crossed strokes is also
-  deleted. Recoverable via Undo. As a guard, if the lasso selection is far larger
-  than the set of strokes actually detected as crossed, the operation aborts
-  rather than mass-deleting.
+  deleted. There is no size guard: the full selection is always deleted, however
+  large. Always recoverable via Undo.
 
 ## Open questions / SDK feasibility risks — resolved by the Step-0 spike
 

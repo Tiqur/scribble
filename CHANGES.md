@@ -1,5 +1,14 @@
 # Changes
 
+## Unreleased
+
+- **Erase no longer cancels.** The over-selection guard is removed: a scribble
+  always deletes everything it selects, however much that is. Previously, a
+  large selection triggered a "cancelled" message — but the plugin still
+  deleted the scribble mark (and anything else fully under it), so content
+  visibly disappeared despite the message saying it wouldn't. If an erase
+  ever takes more than you wanted, use Undo.
+
 ## v1.1.2 — 2026-06-23
 
 - **New plugin icon** — a cleaner scribble mark (transparent background) in place
