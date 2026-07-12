@@ -39,8 +39,9 @@ To erase, scribble in a zig-zag.
 - **Normal writing is safe.** A scribble goes one consistent back-and-forth
   direction; handwriting — including cursive — goes many directions, so it won't
   trigger an erase. A rare misread is still possible — that's what Undo is for.
-- **It won't run away.** If a scribble would take in far more content than it
-  actually crossed, it cancels itself instead of wiping a large area.
+- **Erase always goes through.** Whatever a scribble selects, however much that
+  is, it deletes — there's no size cutoff or cancellation. If it ever takes more
+  than you wanted, use Undo.
 
 ## Limitations
 
@@ -67,5 +68,5 @@ To erase, scribble in a zig-zag.
 ```
 
 Bundles the React Native JS, packages `PluginConfig.json` + assets into a
-`.snplg`, and (with a device connected) pushes it via adb. See `AGENT.md` for the
+`.snplg`, and (with a device connected) pushes it via adb. See `CLAUDE.md` for the
 development workflow and `SPEC.md` for the behaviour specification.

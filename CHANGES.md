@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## v1.1.3 — 2026-07-12
 
 - **Erase no longer cancels.** The over-selection guard is removed: a scribble
   always deletes everything it selects, however much that is. Previously, a

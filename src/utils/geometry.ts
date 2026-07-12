@@ -189,6 +189,16 @@ export function polylinesCross(a: Pt[], b: Pt[]): boolean {
   return false;
 }
 
+/** The 4 corners of a bbox, in a fixed order shared by the EMR→screen converters below. */
+function cornersOf(b: Bbox): Pt[] {
+  return [
+    { x: b.minX, y: b.minY },
+    { x: b.maxX, y: b.minY },
+    { x: b.minX, y: b.maxY },
+    { x: b.maxX, y: b.maxY },
+  ];
+}
+
 /**
  * Converts an EMR-space bounding box to an integer Android/screen-space rect for
  * `lassoElements`. `emrPoint2Android` rescales AND swaps/flips axes, so convert
@@ -196,13 +206,7 @@ export function polylinesCross(a: Pt[], b: Pt[]): boolean {
  * (lassoElements rejects non-integers with error 107).
  */
 export function emrBboxToAndroidRect(b: Bbox, pageSize: { width: number; height: number }): Rect {
-  const corners: Pt[] = [
-    { x: b.minX, y: b.minY },
-    { x: b.maxX, y: b.minY },
-    { x: b.minX, y: b.maxY },
-    { x: b.maxX, y: b.maxY },
-  ];
-  const a = corners.map(c => PointUtils.emrPoint2Android(c, pageSize) as Pt);
+  const a = cornersOf(b).map(c => PointUtils.emrPoint2Android(c, pageSize) as Pt);
   return rectFromCorners(a);
 }
 
@@ -224,13 +228,7 @@ export function emrBboxToScreenRect(
     x: pageSize.width - 1 - p.y / mtY,
     y: p.x / mtX,
   });
-  const corners: Pt[] = [
-    conv({ x: b.minX, y: b.minY }),
-    conv({ x: b.maxX, y: b.minY }),
-    conv({ x: b.minX, y: b.maxY }),
-    conv({ x: b.maxX, y: b.maxY }),
-  ];
-  return rectFromCorners(corners);
+  return rectFromCorners(cornersOf(b).map(conv));
 }
 
 /** Expands a rect by `pad` px on every side, clamped to [0, maxX] × [0, maxY]. */

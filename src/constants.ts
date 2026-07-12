@@ -9,7 +9,7 @@ export function dlog(...args: any[]): void {
 
 // Logged at each action start to confirm which build is actually live: pushing a
 // new .snplg doesn't always replace the running one. Bump per deploy.
-export const BUILD_TAG = 'v1.1.2';
+export const BUILD_TAG = 'v1.1.3';
 
 // Scribble detection: a scribble is a single CONSISTENT back-and-forth.
 // - MIN_CONCENTRATION: how aligned the stroke's segments are to one axis (0–1).
@@ -33,8 +33,7 @@ export const REVERSAL_DEADBAND_FRAC = 0.1;
 // selection it sits right on the boundary — and a slightly tighter device lasso
 // (higher-DPI screens buy less margin from integer rounding) drops it, so the
 // text erases but the scribble doesn't. Pad the rect outward by this many screen
-// px so boundary strokes are comfortably inside; the over-selection guard still
-// caps any extra collateral the wider box pulls in.
+// px so boundary strokes are comfortably inside.
 export const LASSO_PAD_PX = 8;
 
 // SDK element type codes (from getElements / getLassoElements).
