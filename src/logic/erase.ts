@@ -11,8 +11,8 @@
  * @format
  */
 
-import { PluginCommAPI, PluginFileAPI, PluginManager } from 'sn-plugin-lib';
-import { dlog, LASSO_PAD_PX, LOG } from '../constants';
+import { PluginCommAPI, PluginFileAPI } from 'sn-plugin-lib';
+import { BUILD_TAG, dlog, LASSO_PAD_PX, LOG } from '../constants';
 import { acquireBusy, releaseBusy } from './busy';
 import {
   Bbox,
@@ -52,19 +52,10 @@ export async function eraseByScribble(
     dlog(`${LOG} erase: busy — ignoring`);
     return;
   }
-  let viewShown = false;
   let lassoOpen = false;
   let pageEls: any[] = [];
+  const t0 = Date.now();
   try {
-    // Non-blocking "Working…" overlay; the page read can take seconds on a dense
-    // page (getElements marshals every element).
-    try {
-      await PluginManager.showPluginView();
-      viewShown = true;
-    } catch (e) {
-      dlog(`${LOG} erase: showPluginView failed: ${e}`);
-    }
-
     const scribbleBox = bboxOf(scribblePts);
     if (!scribbleBox) {
       dlog(`${LOG} erase: scribble has no bbox`);
@@ -72,7 +63,6 @@ export async function eraseByScribble(
     }
 
     // Find the pre-existing strokes the candidate actually crosses.
-    const t0 = Date.now();
     const elsRes: any = await PluginFileAPI.getElements(page, filePath);
     pageEls = elsRes?.success ? (elsRes.result ?? []) : [];
     const crossed: { uuid: string; box: Bbox }[] = [];
@@ -88,7 +78,17 @@ export async function eraseByScribble(
       if (sameBbox(box, scribbleBox)) continue;
       if (polylinesCross(scribblePts, pts)) crossed.push({ uuid: e.uuid, box });
     }
-    dlog(`${LOG} erase: pageElements=${pageEls.length} crossed=${crossed.length} readMs=${Date.now() - t0}`);
+    const t1 = Date.now();
+    dlog(
+      `${LOG} build=${BUILD_TAG} elements=${pageEls.length} crossed=${crossed.length} ` +
+        `scanMs=${t1 - t0} elemsMs=${Math.round((t1 - t0) / Math.max(1, pageEls.length))}/el`,
+    );
+
+    // A scribble on blank space is just drawing — leave it alone.
+    if (crossed.length === 0) {
+      dlog(`${LOG} erase: scribble crossed nothing — no-op`);
+      return;
+    }
 
     // Lasso the union bbox of the crossed strokes plus the scribble itself.
     const region = unionBbox([scribbleBox, ...crossed.map(c => c.box)]);
@@ -117,11 +117,23 @@ export async function eraseByScribble(
       return padRect(raw, LASSO_PAD_PX, pageSize.width - 1, pageSize.height - 1);
     };
 
-    const lr: any = await PluginCommAPI.lassoElements(toRect(region));
-    if (!lr?.success) {
-      dlog(`${LOG} erase: lassoElements failed ${JSON.stringify(lr?.error)}`);
-      return;
+    // The lasso box still renders (setLassoBoxState(1) here does not prevent
+    // it); the call is kept as it seems to make the selection phase complete
+    // faster. If the host rejects it, we fall through unchanged.
+    try {
+      const hide: any = await PluginCommAPI.setLassoBoxState(1);
+      dlog(`${LOG} pre-hide setLassoBoxState(1) => success=${hide?.success} err=${JSON.stringify(hide?.error)}`);
+    } catch (e) {
+      dlog(`${LOG} pre-hide failed: ${e}`);
     }
+
+    const lr: any = await PluginCommAPI.lassoElements(toRect(region));
+    const t2 = Date.now();
+    dlog(
+      `${LOG} lassoElements => success=${lr?.success} lassoMs=${t2 - t1} ` +
+        `err=${JSON.stringify(lr?.error)}`,
+    );
+    if (!lr?.success) return;
     // From here a lasso is open; the finally always releases it, so an abort or
     // an exception can't leave a dangling selection (which would silently
     // corrupt the host's element list across the next mutation).
@@ -129,27 +141,39 @@ export async function eraseByScribble(
 
     const selRes: any = await PluginCommAPI.getLassoElements();
     const selected: any[] = selRes?.success ? (selRes.result ?? []) : [];
+    const t3 = Date.now();
+    dlog(`${LOG} getLassoElements => selected=${selected.length} selMs=${t3 - t2}`);
     if (selected.length === 0) {
       dlog(`${LOG} erase: lasso selected nothing — aborting`);
       return;
     }
 
     const del: any = await PluginCommAPI.deleteLassoElements();
-    dlog(`${LOG} erase: deleted=${selected.length} crossed=${crossed.length} success=${del?.success}`);
+    const t4 = Date.now();
+    dlog(
+      `${LOG} deleted=${selected.length} crossed=${crossed.length} delMs=${t4 - t3} ` +
+        `success=${del?.success}`,
+    );
   } catch (err) {
     console.error(`${LOG} eraseByScribble failed:`, err);
   } finally {
     // Release the lasso on every path (success or exception) before any later
     // mutation can run.
     if (lassoOpen) {
-      try { await PluginCommAPI.setLassoBoxState(2); } catch (e) { dlog(`${LOG} erase: setLassoBoxState failed: ${e}`); }
+      try {
+        await PluginCommAPI.setLassoBoxState(2);
+      } catch (e) {
+        dlog(`${LOG} erase: setLassoBoxState failed: ${e}`);
+      }
     }
     for (const e of pageEls) {
-      try { e?.recycle?.(); } catch { /* ignore */ }
+      try {
+        e?.recycle?.();
+      } catch {
+        /* ignore */
+      }
     }
     releaseBusy();
-    if (viewShown) {
-      try { await PluginManager.closePluginView(); } catch (e) { dlog(`${LOG} erase: closePluginView failed: ${e}`); }
-    }
+    dlog(`${LOG} totalMs=${Date.now() - t0}`);
   }
 }

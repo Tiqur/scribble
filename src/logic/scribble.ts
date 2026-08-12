@@ -25,6 +25,8 @@ export async function onScribblePenUp(elements: any[]): Promise<void> {
 
     for (const el of elements) {
       if (el?.type !== TYPE_STROKE) continue;
+      // Never treat white-ink strokes as gestures (eraser/synthetic strokes).
+      if (el?.stroke?.penColor === 0xfe) continue;
 
       const pts = await readStrokePoints(el);
       const cls = classifyScribble(pts);
