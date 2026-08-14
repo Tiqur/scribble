@@ -1,11 +1,13 @@
 /**
- * PEN_UP entry point. A stroke triggers an erase only if it (a) looks scribbly
- * enough to be worth checking (cheap shape pre-filter, no page read) and (b)
- * actually crosses existing ink (the overlap gate, in eraseByScribble). A
- * scribbly stroke on blank space is just writing/drawing and is left alone.
+ * PEN_UP entry point.
  *
- * The lib mutates the payload elements in place via transformElements, so each
- * carries a uuid-keyed points accessor.
+ * Every stroke passes through here with its points, so each stroke is cached
+ * (bbox + simplified points) for later crossing tests. The first stroke of a
+ * page triggers a one-time seed read of the page's existing content. A stroke
+ * then triggers an erase only if it (a) looks scribbly enough to be worth
+ * checking and (b) actually crosses cached ink (the overlap gate, in
+ * eraseByScribble). A scribbly stroke on blank space is just writing/drawing
+ * and is left alone.
  *
  * @format
  */
@@ -15,6 +17,8 @@ import { BUILD_TAG, dlog, LOG } from '../constants';
 import { readStrokePoints } from '../utils/geometry';
 import { classifyScribble } from './detect';
 import { eraseByScribble } from './erase';
+import { cacheAdd, cacheHas } from './cache';
+import { seedCache } from './seed';
 import { notify } from './notify';
 
 const TYPE_STROKE = 0;
@@ -23,6 +27,27 @@ export async function onScribblePenUp(elements: any[]): Promise<void> {
   try {
     if (!Array.isArray(elements) || elements.length === 0) return;
 
+    const pathRes: any = await PluginCommAPI.getCurrentFilePath();
+    const pageRes: any = await PluginCommAPI.getCurrentPageNum();
+    const filePath: string | null =
+      pathRes?.success && typeof pathRes.result === 'string' ? pathRes.result : null;
+    const page: number | null =
+      pageRes?.success && typeof pageRes.result === 'number' ? pageRes.result : null;
+    if (filePath == null || page == null) {
+      dlog(`${LOG} pen_up: missing file/page — strokes not cached`);
+      for (const el of elements ?? []) {
+        if (el?.type !== TYPE_STROKE) continue;
+        const pts = await readStrokePoints(el);
+        const cls = classifyScribble(pts);
+        dlog(
+          `${LOG} STROKE ${tagOf(el)} build=${BUILD_TAG} turns=${cls.reversalCount} ` +
+            `diag=${cls.diagonal.toFixed(0)} ` +
+            `-> ${cls.isScribble ? 'SCRIBBLE' : 'normal'} (no context)`,
+        );
+      }
+      return;
+    }
+
     for (const el of elements) {
       if (el?.type !== TYPE_STROKE) continue;
       // Never treat white-ink strokes as gestures (eraser/synthetic strokes).
@@ -30,12 +55,19 @@ export async function onScribblePenUp(elements: any[]): Promise<void> {
 
       const pts = await readStrokePoints(el);
       const cls = classifyScribble(pts);
-      const tag = typeof el?.uuid === 'string' ? el.uuid.slice(0, 8) : '????????';
       dlog(
-        `${LOG} STROKE ${tag} build=${BUILD_TAG} conc=${cls.conc.toFixed(2)} ` +
-          `rev=${cls.rev} diag=${cls.diagonal.toFixed(0)} ` +
+        `${LOG} STROKE ${tagOf(el)} build=${BUILD_TAG} turns=${cls.reversalCount} ` +
+          `diag=${cls.diagonal.toFixed(0)} ` +
           `-> ${cls.isScribble ? 'SCRIBBLE' : 'normal'}`,
       );
+
+      // Cache every stroke so future scribbles cross-test in JS only.
+      if (!cacheHas(filePath, page)) {
+        dlog(`${LOG} cache: cold page — eager seed (one-time full read)`);
+        await seedCache(filePath, page);
+      }
+      cacheAdd(filePath, page, el.numInPage, pts);
+
       if (!cls.isScribble) continue;
 
       // Landscape (split-page) mode is not supported: the host's lasso pipeline
@@ -46,21 +78,12 @@ export async function onScribblePenUp(elements: any[]): Promise<void> {
       try {
         const o = await (NativePluginManager as any).getOrientation();
         if (typeof o === 'number') orientation = o;
-      } catch { /* assume portrait if unavailable */ }
-      if (orientation === 1 || orientation === 3) {
-        dlog(`${LOG} STROKE ${tag} landscape (orientation=${orientation}) — erase unsupported, skipping`);
-        await notify('Scribble erase isn’t available in landscape mode yet.');
-        continue;
+      } catch {
+        /* assume portrait if unavailable */
       }
-
-      const pathRes: any = await PluginCommAPI.getCurrentFilePath();
-      const pageRes: any = await PluginCommAPI.getCurrentPageNum();
-      const filePath: string | null =
-        pathRes?.success && typeof pathRes.result === 'string' ? pathRes.result : null;
-      const page: number | null =
-        pageRes?.success && typeof pageRes.result === 'number' ? pageRes.result : null;
-      if (filePath == null || page == null) {
-        dlog(`${LOG} STROKE ${tag} missing file/page (path=${filePath} page=${page})`);
+      if (orientation === 1 || orientation === 3) {
+        dlog(`${LOG} STROKE ${tagOf(el)} landscape (orientation=${orientation}) — erase unsupported, skipping`);
+        await notify('Scribble erase isn’t available in landscape mode yet.');
         continue;
       }
 
@@ -70,7 +93,15 @@ export async function onScribblePenUp(elements: any[]): Promise<void> {
     console.error(`${LOG} onScribblePenUp failed:`, error);
   } finally {
     for (const el of elements ?? []) {
-      try { el?.recycle?.(); } catch { /* ignore */ }
+      try {
+        el?.recycle?.();
+      } catch {
+        /* ignore */
+      }
     }
   }
+}
+
+function tagOf(el: any): string {
+  return typeof el?.uuid === 'string' ? el.uuid.slice(0, 8) : '????????';
 }

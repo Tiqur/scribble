@@ -1,5 +1,4 @@
 export const LOG = '[Scribble]';
-
 // Gates the diagnostic logs. Errors (`console.error`) and user-facing `alert`s
 // are never gated. Flip on while developing.
 export const DEBUG = false;
@@ -9,24 +8,32 @@ export function dlog(...args: any[]): void {
 
 // Logged at each action start to confirm which build is actually live: pushing a
 // new .snplg doesn't always replace the running one. Bump per deploy.
-export const BUILD_TAG = 'v1.2.0';
+export const BUILD_TAG = 'v1.3.2';
 
-// Scribble detection: a scribble is a single CONSISTENT back-and-forth.
-// - MIN_CONCENTRATION: how aligned the stroke's segments are to one axis (0–1).
-//   A scribble's segments all lie along one direction → high; handwriting goes
-//   many directions → low. Labeled corpus: scribbles 0.96–0.98, words ≤ 0.77.
-// - MIN_REVERSALS: it must actually oscillate along that axis (excludes a single
-//   consistent straight stroke, which is also high-concentration).
-// - MAX_BBOX_DIAGONAL: loose size backstop.
-export const SCRIBBLE_THRESHOLDS = {
-  MIN_CONCENTRATION: 0.85,
-  MIN_REVERSALS: 5,
+// Zig-zag / scribble detection (angle-profile based, tuned against the labeled
+// corpus on-device strokes). A scribble is a stroke with several sharp
+// hairpin turns; handwriting's turns are softer and fewer.
+// - MIN_ANGLE_DEG: reversals must be tighter than this to count as a hairpin.
+//   Cursive 'm'/'w' turns sit around 70–110°; corpus scribbles produce turns
+//   at/above 140°, corpus words stay below. 140 is the separation point.
+// - MIN_REVERSALS: corpus scribbles yield ≥8 hairpins, words ≤4 — 6 sits in
+//   the middle with margin.
+// - STEP_DIST_PCT: the arc-length window (as % of bbox diagonal) used to form
+//   the turn-angle chords; big enough to ignore jitter, small enough to not
+//   cut corners.
+// - EPSILON_PCT: RDP pre-filter tolerance (% of bbox diagonal). 0.5% keeps
+//   enough detail that corner apexes survive.
+// - HOOK_MARGIN_PCT: ignore the first/last portion of the stroke (pen-down and
+//   pen-up hooks create fake sharp turns).
+// - MAX_BBOX_DIAGONAL: loose size backstop (EMR).
+export const ZIGZAG_CONFIG = {
+  MIN_ANGLE_DEG: 140,
+  MIN_REVERSALS: 6,
+  STEP_DIST_PCT: 5.0,
+  EPSILON_PCT: 0.5,
+  HOOK_MARGIN_PCT: 5.0,
   MAX_BBOX_DIAGONAL: 12000,
 };
-
-// Reversal counting ignores oscillations smaller than this fraction of the
-// projected span, so dense-sample jitter doesn't inflate the count.
-export const REVERSAL_DEADBAND_FRAC = 0.1;
 
 // The erase lassoes the union bbox of the crossed strokes + the scribble. The
 // scribble defines that box's outer edge, so with the lasso's "fully inside"

@@ -70,59 +70,6 @@ export function diagonalOf(b: Bbox): number {
   return Math.hypot(b.maxX - b.minX, b.maxY - b.minY);
 }
 
-/**
- * Counts back-and-forth oscillations of a 1-D sequence, ignoring wiggles smaller
- * than `deadbandFrac` of the total span (so dense-sample jitter doesn't inflate
- * the count). Returns the number of confirmed direction changes.
- */
-export function countReversals(seq: number[], deadbandFrac: number): number {
-  if (seq.length < 3) return 0;
-  let lo = seq[0], hi = seq[0];
-  for (const v of seq) {
-    if (v < lo) lo = v;
-    if (v > hi) hi = v;
-  }
-  const span = hi - lo;
-  if (span <= 0) return 0;
-  const db = deadbandFrac * span;
-
-  let reversals = 0;
-  let dir = 0; // 0 = undecided, +1 = rising, -1 = falling
-  let pivot = seq[0]; // extreme of the current run (used once dir is set)
-  let runMin = seq[0]; // running extremes during the undecided bootstrap
-  let runMax = seq[0];
-
-  for (let i = 1; i < seq.length; i++) {
-    const v = seq[i];
-    if (dir === 0) {
-      if (v > runMax) runMax = v;
-      if (v < runMin) runMin = v;
-      if (runMax - v > db) {
-        dir = -1;
-        pivot = v;
-      } else if (v - runMin > db) {
-        dir = 1;
-        pivot = v;
-      }
-    } else if (dir === 1) {
-      if (v > pivot) pivot = v;
-      else if (pivot - v > db) {
-        reversals++;
-        dir = -1;
-        pivot = v;
-      }
-    } else {
-      if (v < pivot) pivot = v;
-      else if (v - pivot > db) {
-        reversals++;
-        dir = 1;
-        pivot = v;
-      }
-    }
-  }
-  return reversals;
-}
-
 function orient(a: Pt, b: Pt, c: Pt): number {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
 }
@@ -150,35 +97,6 @@ export function segmentsIntersect(p1: Pt, p2: Pt, p3: Pt, p4: Pt): boolean {
   return false;
 }
 
-/**
- * Sweep metrics: how consistently the stroke's segments point along ONE axis
- * (`conc`, 0–1), and the number of reversals along that axis (`rev`). A scribble
- * is a single consistent back-and-forth → high `conc`; handwriting goes many
- * directions → low `conc`. `conc` is a length-weighted circular concentration of
- * segment directions doubled (so a back-and-forth, 180° apart, reinforces).
- */
-export function sweepMetrics(pts: Pt[], deadbandFrac: number): { conc: number; rev: number } {
-  if (pts.length < 3) return { conc: 0, rev: 0 };
-  let cx = 0, sx = 0, w = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const dx = pts[i].x - pts[i - 1].x;
-    const dy = pts[i].y - pts[i - 1].y;
-    const l = Math.hypot(dx, dy);
-    if (l === 0) continue;
-    const th = Math.atan2(dy, dx);
-    cx += l * Math.cos(2 * th);
-    sx += l * Math.sin(2 * th);
-    w += l;
-  }
-  if (w === 0) return { conc: 0, rev: 0 };
-  const conc = Math.hypot(cx, sx) / w;
-  const deg = 0.5 * Math.atan2(sx, cx); // dominant sweep axis (radians)
-  const ux = Math.cos(deg), uy = Math.sin(deg);
-  const proj = pts.map(p => p.x * ux + p.y * uy);
-  const rev = countReversals(proj, deadbandFrac);
-  return { conc, rev };
-}
-
 /** True if any segment of polyline `a` intersects any segment of polyline `b`. */
 export function polylinesCross(a: Pt[], b: Pt[]): boolean {
   for (let i = 1; i < a.length; i++) {
@@ -187,6 +105,63 @@ export function polylinesCross(a: Pt[], b: Pt[]): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Douglas–Peucker simplification: keeps only the "turning points" of a
+ * polyline (anything farther than `epsilon` from the chord is kept). This
+ * collapses long straight runs while preserving every real reversal, so it is
+ * ideal for cheap crossing tests. O(n²) worst case, fine for stroke sizes.
+ */
+export const RDP_EPSILON = 60; // EMR: small enough to preserve real crossings
+/**
+ * Cached candidate strokes keep MORE detail than the scribble (which is the
+ * big, expensive side of the crossing test): at epsilon 60 a small curved
+ * stroke (e.g. a cursive 'e', ~150 EMR tall) can collapse to a line and a real
+ * crossing would be missed. 20 preserves small strokes while still cutting
+ * jitter and memory.
+ */
+export const RDP_CANDIDATE_EPSILON = 20;
+
+export function simplifyPath(pts: Pt[], epsilon: number): Pt[] {
+  if (pts.length < 3) return pts.slice();
+  const n = pts.length;
+  const keep = new Array<boolean>(n).fill(false);
+  keep[0] = keep[n - 1] = true;
+  const stack: Array<[number, number]> = [[0, n - 1]];
+  while (stack.length > 0) {
+    const [s, e] = stack.pop() as [number, number];
+    const a = pts[s];
+    const b = pts[e];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    let maxD = 0;
+    let idx = -1;
+    for (let i = s + 1; i < e; i++) {
+      const p = pts[i];
+      let d: number;
+      if (len2 === 0) {
+        d = Math.hypot(p.x - a.x, p.y - a.y);
+      } else {
+        const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
+        const px = a.x + t * dx;
+        const py = a.y + t * dy;
+        d = Math.hypot(p.x - px, p.y - py);
+      }
+      if (d > maxD) {
+        maxD = d;
+        idx = i;
+      }
+    }
+    if (idx > 0 && maxD > epsilon) {
+      keep[idx] = true;
+      stack.push([s, idx], [idx, e]);
+    }
+  }
+  const out: Pt[] = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i]);
+  return out;
 }
 
 /** The 4 corners of a bbox, in a fixed order shared by the EMR→screen converters below. */

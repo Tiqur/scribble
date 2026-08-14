@@ -1,12 +1,14 @@
 /**
- * The erase operation: the stroke has already been classified a scribble. Delete
- * the strokes it crosses (plus itself) via the lasso pipeline — the only undoable
- * delete path.
+ * The erase operation: the stroke has already been classified a scribble.
+ * Delete the strokes it crosses (plus itself) via the lasso pipeline — the
+ * only UNDOABLE delete path (file-level writes are not recorded on the host
+ * undo stack).
  *
- * Sequence: read the page → find crossed strokes (bbox prefilter → polyline
- * intersection, excluding the just-drawn stroke) → lasso the union bounding box
- * (screen coords) → deleteLassoElements → release the lasso. The page read
- * happens only here (on a confirmed scribble), never during normal writing.
+ * Flow: sanity-check the cache (cheap element-count drift test) → find crossed
+ * strokes from the cache (bbox prefilter → polyline intersection on
+ * RDP-simplified points, excluding the just-drawn stroke) → lasso the union
+ * bounding box (screen coords) → deleteLassoElements → release the lasso.
+ * No getElements / per-element reads on the hot path.
  *
  * @format
  */
@@ -16,17 +18,19 @@ import { BUILD_TAG, dlog, LASSO_PAD_PX, LOG } from '../constants';
 import { acquireBusy, releaseBusy } from './busy';
 import {
   Bbox,
-  bboxesOverlap,
   bboxOf,
   emrBboxToAndroidRect,
   emrBboxToScreenRect,
   padRect,
   polylinesCross,
   Pt,
-  readStrokePoints,
   Rect,
+  RDP_EPSILON,
+  simplifyPath,
   unionBbox,
 } from '../utils/geometry';
+import { cacheOffset, cacheQuery, cacheRemoveNums, cacheSize } from './cache';
+import { seedCache } from './seed';
 
 const TYPE_STROKE = 0;
 
@@ -38,6 +42,35 @@ function sameBbox(a: Bbox, b: Bbox, eps = 3): boolean {
     Math.abs(a.maxX - b.maxX) < eps &&
     Math.abs(a.maxY - b.maxY) < eps
   );
+}
+
+/**
+ * Keep the cache honest with a single cheap native call: the host's element
+ * count (from getElementNumList — the same API the seed baseline came from)
+ * must equal cacheSize + offset. Host undo, the built-in eraser, or text edits
+ * shift the host side → reseed once, then continue. Returns true if a reseed
+ * happened.
+ */
+async function validateCache(filePath: string, page: number): Promise<boolean> {
+  const off = cacheOffset(filePath, page);
+  if (off === null) {
+    // No seed yet (shouldn't happen — scribble.ts seeds eagerly) — seed now.
+    await seedCache(filePath, page);
+    return true;
+  }
+  const numRes: any = await PluginFileAPI.getElementNumList(filePath, page);
+  if (!numRes || numRes.success !== true || !Array.isArray(numRes.result)) {
+    dlog(`${LOG} cache: getElementNumList failed (${JSON.stringify(numRes?.error)}) — trusting cache`);
+    return false;
+  }
+  const hostTotal = numRes.result.length;
+  const expected = cacheSize(filePath, page) + off;
+  if (hostTotal === expected) return false;
+  dlog(
+    `${LOG} cache: drift hostTotal=${hostTotal} expected=${expected} (cache=${cacheSize(filePath, page)} off=${off}) — reseeding`,
+  );
+  await seedCache(filePath, page);
+  return true;
 }
 
 export async function eraseByScribble(
@@ -53,7 +86,6 @@ export async function eraseByScribble(
     return;
   }
   let lassoOpen = false;
-  let pageEls: any[] = [];
   const t0 = Date.now();
   try {
     const scribbleBox = bboxOf(scribblePts);
@@ -62,26 +94,28 @@ export async function eraseByScribble(
       return;
     }
 
-    // Find the pre-existing strokes the candidate actually crosses.
-    const elsRes: any = await PluginFileAPI.getElements(page, filePath);
-    pageEls = elsRes?.success ? (elsRes.result ?? []) : [];
-    const crossed: { uuid: string; box: Bbox }[] = [];
-    for (const e of pageEls) {
-      if (e?.type !== TYPE_STROKE || e?.uuid === scribbleEl?.uuid) continue;
-      const pts = await readStrokePoints(e);
-      const box = bboxOf(pts);
-      if (!box || !bboxesOverlap(box, scribbleBox)) continue; // cheap prefilter
-      // Robust self-exclusion: the just-drawn stroke is ALSO in getElements,
-      // often with a different uuid (uuid isn't consistent across SDK APIs), so
-      // the uuid check above can miss it. Skip it by geometry — otherwise a
-      // self-intersecting cursive word "crosses itself" and erases itself.
-      if (sameBbox(box, scribbleBox)) continue;
-      if (polylinesCross(scribblePts, pts)) crossed.push({ uuid: e.uuid, box });
+    const tV = Date.now();
+    await validateCache(filePath, page);
+    dlog(`${LOG} validateMs=${Date.now() - tV}`);
+
+    // Find the pre-existing strokes the candidate actually crosses — from the
+    // cache, crossing against RDP-simplified points (no page re-read).
+    const scribbleSimp = simplifyPath(scribblePts, RDP_EPSILON);
+    // Self-exclusion: the gesture is cached too (added before the erase). If
+    // numInPage is missing for some reason, fall back to geometry.
+    const excludeNum =
+      typeof scribbleEl?.numInPage === 'number' ? scribbleEl.numInPage : -1;
+    const candidates = cacheQuery(filePath, page, scribbleBox, excludeNum).filter(
+      c => !sameBbox(c.bbox, scribbleBox),
+    );
+    const crossed: { num: number; box: Bbox }[] = [];
+    for (const c of candidates) {
+      if (polylinesCross(scribbleSimp, c.pts)) crossed.push({ num: c.num, box: c.bbox });
     }
     const t1 = Date.now();
     dlog(
-      `${LOG} build=${BUILD_TAG} elements=${pageEls.length} crossed=${crossed.length} ` +
-        `scanMs=${t1 - t0} elemsMs=${Math.round((t1 - t0) / Math.max(1, pageEls.length))}/el`,
+      `${LOG} build=${BUILD_TAG} cached=${cacheSize(filePath, page)} ` +
+        `candidates=${candidates.length} crossed=${crossed.length} scanMs=${t1 - t0}`,
     );
 
     // A scribble on blank space is just drawing — leave it alone.
@@ -154,6 +188,21 @@ export async function eraseByScribble(
       `${LOG} deleted=${selected.length} crossed=${crossed.length} delMs=${t4 - t3} ` +
         `success=${del?.success}`,
     );
+    if (del && del.success === true) {
+      // Exact cache sync from the actual selection (keeps the drift check quiet).
+      const deletedNums = selected
+        .filter((e: any) => e?.type === TYPE_STROKE && typeof e.numInPage === 'number')
+        .map((e: any) => e.numInPage);
+      const removed = cacheRemoveNums(filePath, page, deletedNums);
+      dlog(`${LOG} cache: removed ${removed} exact stroke(s) from lasso selection`);
+    }
+    for (const e of selected) {
+      try {
+        e?.recycle?.();
+      } catch {
+        /* ignore */
+      }
+    }
   } catch (err) {
     console.error(`${LOG} eraseByScribble failed:`, err);
   } finally {
@@ -164,13 +213,6 @@ export async function eraseByScribble(
         await PluginCommAPI.setLassoBoxState(2);
       } catch (e) {
         dlog(`${LOG} erase: setLassoBoxState failed: ${e}`);
-      }
-    }
-    for (const e of pageEls) {
-      try {
-        e?.recycle?.();
-      } catch {
-        /* ignore */
       }
     }
     releaseBusy();
