@@ -8,7 +8,7 @@ export function dlog(...args: any[]): void {
 
 // Logged at each action start to confirm which build is actually live: pushing a
 // new .snplg doesn't always replace the running one. Bump per deploy.
-export const BUILD_TAG = 'v1.3.2';
+export const BUILD_TAG = 'v1.3.3';
 
 // Zig-zag / scribble detection (angle-profile based, tuned against the labeled
 // corpus on-device strokes). A scribble is a stroke with several sharp

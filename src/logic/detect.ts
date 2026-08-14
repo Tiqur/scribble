@@ -18,7 +18,7 @@
  * @format
  */
 
-import { ZIGZAG_CONFIG } from '../constants';
+import { getZigzagConfig } from '../config';
 import { bboxOf, diagonalOf, Pt, simplifyPath } from '../utils/geometry';
 
 export interface ScribbleClass {
@@ -34,13 +34,14 @@ export function classifyScribble(rawPoints: Pt[]): ScribbleClass {
 
   const box = bboxOf(rawPoints);
   const diagonal = box ? diagonalOf(box) : 0;
-  if (diagonal <= 0 || diagonal > ZIGZAG_CONFIG.MAX_BBOX_DIAGONAL) {
+  if (diagonal <= 0 || diagonal > getZigzagConfig().MAX_BBOX_DIAGONAL) {
     return { isScribble: false, reversalCount: 0, diagonal };
   }
 
   // 1. Relative geometry: everything is a % of the stroke's own size.
-  const epsilon = (ZIGZAG_CONFIG.EPSILON_PCT / 100) * diagonal;
-  const stepDist = (ZIGZAG_CONFIG.STEP_DIST_PCT / 100) * diagonal;
+  const cfg = getZigzagConfig();
+  const epsilon = (cfg.EPSILON_PCT / 100) * diagonal;
+  const stepDist = (cfg.STEP_DIST_PCT / 100) * diagonal;
 
   // 2. RDP pre-filter: strips collinear jitter, preserves corner apexes.
   const points = simplifyPath(rawPoints, epsilon);
@@ -57,7 +58,7 @@ export function classifyScribble(rawPoints: Pt[]): ScribbleClass {
     // Too short for even one analysis window — a dot, not a scribble.
     return { isScribble: false, reversalCount: 0, diagonal };
   }
-  const hookMargin = totalLength * (ZIGZAG_CONFIG.HOOK_MARGIN_PCT / 100);
+  const hookMargin = totalLength * (cfg.HOOK_MARGIN_PCT / 100);
 
   // Exact coordinate at a given distance along the stroke.
   function pointAtArcLength(targetLen: number): Pt {
@@ -107,7 +108,7 @@ export function classifyScribble(rawPoints: Pt[]): ScribbleClass {
   const candidates: { angleDeg: number; arcLen: number }[] = [];
   for (let i = 1; i < points.length - 1; i++) {
     const angle = angleProfile[i];
-    if (angle < ZIGZAG_CONFIG.MIN_ANGLE_DEG) continue;
+    if (angle < cfg.MIN_ANGLE_DEG) continue;
     let isLocalMax = true;
     for (let j = 0; j < points.length; j++) {
       if (i === j) continue;
@@ -134,7 +135,7 @@ export function classifyScribble(rawPoints: Pt[]): ScribbleClass {
 
   // 7. Classification.
   return {
-    isScribble: reversals.length >= ZIGZAG_CONFIG.MIN_REVERSALS,
+    isScribble: reversals.length >= cfg.MIN_REVERSALS,
     reversalCount: reversals.length,
     diagonal,
   };

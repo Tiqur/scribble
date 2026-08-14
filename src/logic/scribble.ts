@@ -14,6 +14,7 @@
 
 import { PluginCommAPI, NativePluginManager } from 'sn-plugin-lib';
 import { BUILD_TAG, dlog, LOG } from '../constants';
+import { pushDecision } from '../config';
 import { readStrokePoints } from '../utils/geometry';
 import { classifyScribble } from './detect';
 import { eraseByScribble } from './erase';
@@ -22,6 +23,15 @@ import { seedCache } from './seed';
 import { notify } from './notify';
 
 const TYPE_STROKE = 0;
+
+// Classification summary shared by the log line and the settings panel's live
+// feedback ring.
+function classifyLine(cls: { reversalCount: number; diagonal: number; isScribble: boolean }): string {
+  return (
+    `turns=${cls.reversalCount} diag=${cls.diagonal.toFixed(0)} ` +
+    `-> ${cls.isScribble ? 'SCRIBBLE' : 'normal'}`
+  );
+}
 
 export async function onScribblePenUp(elements: any[]): Promise<void> {
   try {
@@ -39,11 +49,9 @@ export async function onScribblePenUp(elements: any[]): Promise<void> {
         if (el?.type !== TYPE_STROKE) continue;
         const pts = await readStrokePoints(el);
         const cls = classifyScribble(pts);
-        dlog(
-          `${LOG} STROKE ${tagOf(el)} build=${BUILD_TAG} turns=${cls.reversalCount} ` +
-            `diag=${cls.diagonal.toFixed(0)} ` +
-            `-> ${cls.isScribble ? 'SCRIBBLE' : 'normal'} (no context)`,
-        );
+        const line = classifyLine(cls);
+        dlog(`${LOG} STROKE ${tagOf(el)} build=${BUILD_TAG} ${line} (no context)`);
+        pushDecision(`${line} (no context)`);
       }
       return;
     }
@@ -55,11 +63,9 @@ export async function onScribblePenUp(elements: any[]): Promise<void> {
 
       const pts = await readStrokePoints(el);
       const cls = classifyScribble(pts);
-      dlog(
-        `${LOG} STROKE ${tagOf(el)} build=${BUILD_TAG} turns=${cls.reversalCount} ` +
-          `diag=${cls.diagonal.toFixed(0)} ` +
-          `-> ${cls.isScribble ? 'SCRIBBLE' : 'normal'}`,
-      );
+      const line = classifyLine(cls);
+      dlog(`${LOG} STROKE ${tagOf(el)} build=${BUILD_TAG} ${line}`);
+      pushDecision(line);
 
       // Cache every stroke so future scribbles cross-test in JS only.
       if (!cacheHas(filePath, page)) {
